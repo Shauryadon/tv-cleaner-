@@ -208,7 +208,7 @@ esac
 #                         It also handles input_key_keycodes and app_keys (config.xml or a theme; a YouTube button)
 #   HOME_KEY_SERVICE=1    remotes whose Home button sends KEYCODE_ALL_APPS instead of HOME, e.g. Xiaomi
 #                         sticks: the key is routed to the launcher (HomeKeyService)
-#   RESTORE_KEY_SERVICES=1  grants WRITE_SECURE_SETTINGS, so that with restore_key_services (config.xml or a
+#   RESTORE_KEY_SERVICES=1  grants WRITE_SECURE_SETTINGS (a run without it revokes it), so that with restore_key_services (config.xml or a
 #                         theme) Home puts these helpers back after a force stop of the launcher
 # TCL firmware (TclAppBoot) refuses to bind an app's accessibility service while the app is not running unless it
 # holds the AUTO_START app-op, so grant it first; other TVs do not know the op and ignore it. Builds name it
@@ -223,7 +223,20 @@ enable_service() {   # appends to enabled_accessibility_services without droppin
 }
 if [ "${INPUT_KEY_SERVICE:-0}" = 1 ]; then enable_service InputKeyService; fi
 if [ "${HOME_KEY_SERVICE:-0}" = 1 ]; then enable_service HomeKeyService; fi
+# The grant follows the switch on every install: pm install -r keeps a grant, so a run without the switch takes it
+# back. WRITE_SECURE_SETTINGS opens every secure and global setting, not only the accessibility list.
+# tv.py does not hand back the TV shell's exit status, so each side prints its marker only once the TV shows the
+# state it wants, and the install stops when the marker is missing. The revoke is judged by the package's
+# permission state rather than pm's exit status, so a permission that was never granted counts as revoked, and a
+# dumpsys that does not list the permission at all prints nothing.
+SECURE=android.permission.WRITE_SECURE_SETTINGS
 if [ "${RESTORE_KEY_SERVICES:-0}" = 1 ]; then
-  "$PY" -I ../tools/tv.py "pm grant com.gathin.tvhome android.permission.WRITE_SECURE_SETTINGS && echo restore-granted"
+  STEP="pm grant com.gathin.tvhome $SECURE && echo restore-granted"; MARK=restore-granted
+else
+  STEP="pm revoke com.gathin.tvhome $SECURE; s=\$(dumpsys package com.gathin.tvhome); case \"\$s\" in *\"$SECURE: granted=true\"*) ;; *\"$SECURE\"*) echo secure-settings-revoked ;; esac"
+  MARK=secure-settings-revoked
 fi
+OUT=$("$PY" -I ../tools/tv.py "$STEP")
+echo "$OUT"
+case "$OUT" in *"$MARK"*) ;; *) echo "ERROR: WRITE_SECURE_SETTINGS is not in the state this install asked for ($MARK missing)" >&2; exit 1 ;; esac
 echo "Installed. Press Home on the remote to see it."

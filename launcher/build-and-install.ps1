@@ -7,7 +7,7 @@
 #        [-InputKeyService]   remote's Input button opens the input switcher (Google TV), plus config.xml
 #                             input_key_keycodes and app_keys; re-pass on every install
 #        [-HomeKeyService]    remotes whose Home button sends KEYCODE_ALL_APPS (Xiaomi sticks)
-#        [-RestoreKeyServices] grants WRITE_SECURE_SETTINGS for restore_key_services (helpers back after a force stop)
+#        [-RestoreKeyServices] grants WRITE_SECURE_SETTINGS for restore_key_services (helpers back after a force stop); revoked without it
 param(
     [string]$TvHost = $env:TV_HOST,
     [string]$StockLauncher = '',
@@ -155,7 +155,18 @@ function Enable-Service([string]$Name) {
 }
 if ($InputKeyService) { Enable-Service 'InputKeyService' }
 if ($HomeKeyService) { Enable-Service 'HomeKeyService' }
+# The grant follows the switch on every install: pm install -r keeps a grant, so a run without the switch takes it
+# back. WRITE_SECURE_SETTINGS opens every secure and global setting, not only the accessibility list.
+# tv.py does not hand back the TV shell's exit status, so each side prints its marker only once the TV shows the
+# state it wants, and the install stops when the marker is missing (see build-and-install.sh).
+$secure = 'android.permission.WRITE_SECURE_SETTINGS'
 if ($RestoreKeyServices) {
-    'pm grant com.gathin.tvhome android.permission.WRITE_SECURE_SETTINGS && echo restore-granted' | & $py -I ..\tools\tv.py --batch
+    $step = "pm grant com.gathin.tvhome $secure && echo restore-granted"; $mark = 'restore-granted'
+} else {
+    $step = "pm revoke com.gathin.tvhome $secure; s=`$(dumpsys package com.gathin.tvhome); case `"`$s`" in *`"${secure}: granted=true`"*) ;; *`"$secure`"*) echo secure-settings-revoked ;; esac"
+    $mark = 'secure-settings-revoked'
 }
+$out = ($step | & $py -I ..\tools\tv.py --batch) -join "`n"
+Write-Host $out
+if ($out -notmatch [regex]::Escape($mark)) { throw "WRITE_SECURE_SETTINGS is not in the state this install asked for ($mark missing)" }
 Write-Host 'Installed. Press Home on the remote to see it.'
